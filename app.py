@@ -5,7 +5,7 @@ import pydeck as pdk
 from datetime import datetime, timedelta
 
 # 1. Page Config
-st.set_page_config(page_title="Radius Watch", page_icon="📍", layout="wide")
+st.set_page_config(page_title="The Knox SRO Watch", page_icon="📍", layout="wide")
 
 # --- NO CRAWL & STYLING ---
 st.markdown("""
@@ -13,6 +13,7 @@ st.markdown("""
         div[data-testid="stVerticalBlock"] > div { gap: 0.2rem; }
         .stMarkdown p { font-size: 0.9rem; margin-bottom: 0px; }
         div.stButton > button { width: 100%; }
+        .report-text { font-size: 1.1rem; line-height: 1.5; color: #333; }
     </style>
     <meta name="robots" content="noindex, nofollow">
 """, unsafe_allow_html=True)
@@ -21,19 +22,26 @@ st.markdown("""
 if 'limit' not in st.session_state:
     st.session_state.limit = 800
 
-# Header
-st.header("My Block: 160ft Radius")
-st.write("Daily feed of ALL 311 reports within ~160 feet of the target location.")
-st.markdown("Download the Solve SF App to report your concerns to the City of San Francisco. ([iOS](https://apps.apple.com/us/app/solve-sf/id6737751237) | [Android](https://play.google.com/store/apps/details?id=com.woahfinally.solvesf))")
-
 # 3. Date & API Setup
 ninety_days_ago = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%dT%H:%M:%S')
 base_url = "https://data.sfgov.org/resource/vw6y-z8j6.json"
 
-# TARGET COORDINATES
+# TARGET COORDINATES (6th & Tehama / Knox SRO)
 target_lat = 37.77935708464253
 target_lon = -122.4064893420712
-radius_meters = 48.8  # 160 feet approx
+radius_meters = 48.8  # ~160 feet
+
+# Header & Advocacy Text
+st.header("The Knox SRO: Neighborhood Impact")
+
+st.markdown(f"""
+The Knox SRO at 241 6th Street, operated by TODCO, through permissive management and a lack of security have invited open air drug markets, violence, open drug use, and disorderly neighbors to a residential neighborhood.
+
+This website displays 311 tickets filed within **160 feet** of the Knox SRO, to demonstrate the general chaos, open-air drug use and dealing, unsafe and inhumane conditions that continue to persist within **160 feet** of its entrance. Cases are updated daily when 311 data refreshes.
+""")
+
+st.markdown("Download the **Solve SF** app to submit reports: [iOS](https://apps.apple.com/us/app/solve-sf/id6737751237) | [Android](https://play.google.com/store/apps/details?id=com.woahfinally.solvesf)")
+st.markdown("---")
 
 # 4. Query
 params = {
@@ -63,7 +71,7 @@ def get_data(query_limit):
 
 df = get_data(st.session_state.limit)
 
-# --- MAP SECTION (FIXED) ---
+# --- MAP SECTION (FIXED INDENTATION) ---
 with st.expander("🗺️ View Map & Radius", expanded=False):
     if not df.empty and 'lat' in df.columns:
         # Layer 1: The Target Radius (Red Circle)
@@ -109,7 +117,7 @@ with st.expander("🗺️ View Map & Radius", expanded=False):
             tooltip={"text": "{service_name}\n{requested_datetime}"}
         ))
     else:
-        st.info("Map data unavailable.")
+        st.info("Map data unavailable or no records found.")
 
 st.markdown("---")
 
@@ -168,7 +176,7 @@ if not df.empty:
             st.rerun()
 
 else:
-    st.info(f"No records found within 160ft of {target_lat}, {target_lon} in the last 90 days.")
+    st.info(f"No records found within 160ft of the Knox SRO in the last 90 days.")
 
 # Footer
 st.markdown("---")
