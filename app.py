@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import requests
+import pydeck as pdk  # NEW IMPORT
 from datetime import datetime, timedelta
 
 # 1. Page Config
@@ -24,7 +25,6 @@ if 'limit' not in st.session_state:
 st.header("My Block: 160ft Radius")
 st.write("Daily feed of ALL 311 reports within ~160 feet of the target location.")
 st.markdown("Download the Solve SF App to report your concerns to the City of San Francisco. ([iOS](https://apps.apple.com/us/app/solve-sf/id6737751237) | [Android](https://play.google.com/store/apps/details?id=com.woahfinally.solvesf))")
-st.markdown("---")
 
 # 3. Date & API Setup
 ninety_days_ago = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%dT%H:%M:%S')
@@ -36,7 +36,6 @@ target_lon = -122.4064893420712
 radius_meters = 48.8  # 160 feet approx
 
 # 4. Query
-# using Socrata's within_circle(location_column, lat, long, radius_in_meters)
 params = {
     "$where": f"within_circle(point, {target_lat}, {target_lon}, {radius_meters}) AND requested_datetime > '{ninety_days_ago}' AND media_url IS NOT NULL",
     "$order": "requested_datetime DESC",
@@ -49,13 +48,75 @@ def get_data(query_limit):
     try:
         r = requests.get(base_url, params=params)
         if r.status_code == 200:
-            return pd.DataFrame(r.json())
+            df_data = pd.DataFrame(r.json())
+            
+            # Extract Lat/Lon for mapping if data exists
+            if not df_data.empty and 'point' in df_data.columns:
+                # The 'point' column usually is a dict {'type': 'Point', 'coordinates': [lon, lat]}
+                # But Socrata JSON usually gives flat lat/long columns too if requested, 
+                # or we can extract from 'lat' and 'long' if they exist.
+                # Often Socrata returns 'lat' and 'long' as strings.
+                if 'lat' in df_data.columns and 'long' in df_data.columns:
+                    df_data['lat'] = pd.to_numeric(df_data['lat'])
+                    df_data['lon'] = pd.to_numeric(df_data['long'])
+            return df_data
         else:
             return pd.DataFrame()
     except:
         return pd.DataFrame()
 
 df = get_data(st.session_state.limit)
+
+# --- MAP SECTION (NEW) ---
+# We place this in an expander so it doesn't push the photos down too far
+with st.expander("🗺️ View Map & Radius", expanded=False):
+    if not df.empty and 'lat' in df.columns:
+        # Layer 1: The Target Radius (Red Circle)
+        # We use a ScatterplotLayer with a fixed radius in meters
+        target_data = pd.DataFrame({'lat': [target_lat], 'lon': [target_lon]})
+        
+        layer_radius = pdk.Layer(
+            "ScatterplotLayer",
+            target_data,
+            get_position='[lon, lat]',
+            get_color=[255, 0, 0, 50],  # Faint Red fill
+            get_radius=radius_meters,   # The 160ft radius
+            stroked=True,
+            get_line_color=[255, 0, 0, 200], # Solid Red outline
+            get_line_width=2,
+            radius_scale=1,
+            radius_min_pixels=1,
+            radius_max_pixels=1000,
+        )
+
+        # Layer 2: The Reports (Blue Dots)
+        layer_points = pdk.Layer(
+            "ScatterplotLayer",
+            df,
+            get_position='[lon, lat]',
+            get_color=[0, 128, 255, 200],
+            get_radius=3,
+            pickable=True,
+        )
+
+        # Map View State
+        view_state = pdk.ViewState(
+            latitude=target_lat,
+            longitude=target_lon,
+            zoom=18,
+            pitch=0,
+        )
+
+        st.pydeck_chart(pdk.Deck(
+            map_style='mapbox://styles/mapbox/light-v9',
+            initial_view_state=view_state,
+            layers=[layer_radius, layer_points],
+            tooltip={"text": "{service_name}\n{requested_datetime}"}
+        ))
+    else:
+        st.info("Map data unavailable.")
+
+st.markdown("---")
 
 # 6. Helper: Identify Image vs Portal Link
 def get_image_info(media_item):
@@ -64,11 +125,8 @@ def get_image_info(media_item):
     if not url: return None, False
     clean_url = url.split('?')[0].lower()
     
-    # Case A: Standard Image (Public Cloud)
     if clean_url.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')):
         return url, True
-        
-    # Case B: Verint Portal or other Web Links
     return url, False
 
 # 7. Display Feed
@@ -83,28 +141,20 @@ if not df.empty:
 
         full_url, is_viewable = get_image_info(row.get('media_url'))
         
-        # STRICT FILTER: Only show records with viewable images
         if full_url and is_viewable:
             col_index = display_count % 4
-            
             with cols[col_index]:
                 with st.container(border=True):
-                    
-                    # --- STANDARD IMAGE COMPONENT ---
                     st.image(full_url, use_container_width=True)
-
-                    # Metadata
+                    
                     if 'requested_datetime' in row:
                         date_str = pd.to_datetime(row['requested_datetime']).strftime('%b %d, %I:%M %p')
                     else:
                         date_str = "?"
                     
-                    # Display Service Name (Category) since we now show all types
                     category = row.get('service_name', 'Unknown Issue')
                     address = row.get('address', 'Location N/A')
-                    
-                    # Clean up Google Maps Link
-                    map_url = f"https://www.google.com/maps?q={address.replace(' ', '+')}"
+                    map_url = f"https://www.google.com/maps/search/?api=1&query={address.replace(' ', '+')}"
                     
                     st.markdown(f"**{category}**")
                     st.markdown(f"{date_str} | [{address}]({map_url})")
@@ -112,7 +162,7 @@ if not df.empty:
             display_count += 1
             
     if display_count == 0:
-        st.info("No viewable images found in this radius (Web Portal links hidden).")
+        st.info("No viewable images found in this radius.")
     
     # Load More Button
     st.markdown("---")
@@ -125,17 +175,6 @@ if not df.empty:
 else:
     st.info(f"No records found within 160ft of {target_lat}, {target_lon} in the last 90 days.")
 
-# Footer & Methodology
+# Footer
 st.markdown("---")
 st.caption("Data source: [DataSF | Open Data Portal](https://data.sfgov.org/City-Infrastructure/311-Cases/vw6y-z8j6/about_data)")
-
-with st.expander("Methodology & Notes"):
-    st.markdown(f"""
-    **Filters Applied:**
-    * **Location:** Within 160 feet ({radius_meters} meters) of {target_lat}, {target_lon}.
-    * **Categories:** ALL (No category filter applied).
-    * **Timeframe:** Rolling 90-day window.
-    
-    **Data Limitations:**
-    This feed exclusively visualizes reports containing publicly accessible images. Reports submitted via the internal web portal are excluded as their images are password-protected.
-    """)
