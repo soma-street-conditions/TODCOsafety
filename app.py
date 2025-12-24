@@ -19,7 +19,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # 2. Session State for "Load More"
-# UPDATE: Increased initial load from 800 -> 2000
 if 'limit' not in st.session_state:
     st.session_state.limit = 2000
 
@@ -28,9 +27,9 @@ if 'limit' not in st.session_state:
 five_months_ago = (datetime.now() - timedelta(days=150)).strftime('%Y-%m-%dT%H:%M:%S')
 base_url = "https://data.sfgov.org/resource/vw6y-z8j6.json"
 
-# TARGET COORDINATES (Knox SRO Center Point)
-target_lat = 37.779421866793456
-target_lon = -122.4064255044886
+# TARGET COORDINATES (Updated Center Point)
+target_lat = 37.77947681979851
+target_lon = -122.40646722115551
 radius_meters = 48.8  # ~160 feet
 
 # Header & Executive Briefing
@@ -48,7 +47,7 @@ st.markdown("Download the **Solve SF** app to submit reports: [iOS](https://apps
 st.markdown("---")
 
 # 4. Query
-# UPDATE: Added "AND service_name != 'Tree Maintenance'" to exclude tree tickets
+# Excludes 'Tree Maintenance' tickets
 params = {
     "$where": f"within_circle(point, {target_lat}, {target_lon}, {radius_meters}) AND requested_datetime > '{five_months_ago}' AND media_url IS NOT NULL AND service_name != 'Tree Maintenance'",
     "$order": "requested_datetime DESC",
@@ -119,7 +118,7 @@ with st.expander("🗺️ View Map & Incident Distribution", expanded=False):
             map_style=pdk.map_styles.CARTO_LIGHT,
             initial_view_state=view_state,
             layers=[layer_radius, layer_points],
-            tooltip={"text": "{service_name}\n{requested_datetime}"}
+            tooltip={"text": "{service_subtype}\n{requested_datetime}"}
         ))
     else:
         st.info("Map data unavailable or no records found.")
@@ -174,8 +173,7 @@ if not df.empty:
                     else:
                         date_str = "?"
                     
-                    # UPDATE: Use 'service_subtype' instead of 'service_name'
-                    # We treat title casing and underscores for better readability
+                    # Subtype for title (Cleaned up)
                     raw_subtype = row.get('service_subtype', 'Unknown Issue')
                     display_title = raw_subtype.replace('_', ' ').title()
                     
