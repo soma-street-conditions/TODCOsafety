@@ -23,7 +23,7 @@ if 'limit' not in st.session_state:
     st.session_state.limit = 800
 
 # 3. Date & API Setup
-# UPDATE: Extended window to 5 months (approx 150 days)
+# Window: 5 months (approx 150 days)
 five_months_ago = (datetime.now() - timedelta(days=150)).strftime('%Y-%m-%dT%H:%M:%S')
 base_url = "https://data.sfgov.org/resource/vw6y-z8j6.json"
 
@@ -47,7 +47,6 @@ st.markdown("Download the **Solve SF** app to submit reports: [iOS](https://apps
 st.markdown("---")
 
 # 4. Query
-# This filters at the API level (Server Side) before data is returned.
 params = {
     "$where": f"within_circle(point, {target_lat}, {target_lon}, {radius_meters}) AND requested_datetime > '{five_months_ago}' AND media_url IS NOT NULL",
     "$order": "requested_datetime DESC",
@@ -132,9 +131,12 @@ def get_image_info(media_item):
     if not url: return None, False
     clean_url = url.split('?')[0].lower()
     
+    # Case A: Standard Image (Public Cloud)
     if clean_url.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')):
-        return url, True
-    return url, False
+        return url, True # True = It's an image we can display inline
+        
+    # Case B: Portal Link (HTML wrapper)
+    return url, False # False = It's a link, but not an inline image
 
 # 7. Display Feed
 if not df.empty:
@@ -146,14 +148,28 @@ if not df.empty:
         if 'duplicate' in notes:
             continue
 
-        full_url, is_viewable = get_image_info(row.get('media_url'))
+        full_url, is_image = get_image_info(row.get('media_url'))
         
-        if full_url and is_viewable:
+        # SHOW IF: It is an image OR it is a valid portal link
+        if full_url:
             col_index = display_count % 4
             with cols[col_index]:
                 with st.container(border=True):
-                    st.image(full_url, use_container_width=True)
                     
+                    # LOGIC: If image, show it. If portal link, show placeholder button.
+                    if is_image:
+                        st.image(full_url, use_container_width=True)
+                    else:
+                        # Placeholder for non-image links
+                        st.markdown(f"""
+                        <div style="background-color:#f0f2f6; height:200px; display:flex; align-items:center; justify-content:center; border-radius:10px; margin-bottom:10px;">
+                            <a href="{full_url}" target="_blank" style="text-decoration:none; color:#333; font-weight:bold; text-align:center;">
+                                📷 View Evidence<br><span style="font-size:0.8rem; color:#666;">(External Portal)</span>
+                            </a>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # Metadata
                     if 'requested_datetime' in row:
                         date_str = pd.to_datetime(row['requested_datetime']).strftime('%b %d, %I:%M %p')
                     else:
@@ -169,7 +185,7 @@ if not df.empty:
             display_count += 1
             
     if display_count == 0:
-        st.info("No viewable images found in this radius.")
+        st.info("No records found with media evidence.")
     
     # Load More Button
     st.markdown("---")
