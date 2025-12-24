@@ -19,8 +19,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # 2. Session State for "Load More"
+# UPDATE: Increased initial load from 800 -> 2000
 if 'limit' not in st.session_state:
-    st.session_state.limit = 800
+    st.session_state.limit = 2000
 
 # 3. Date & API Setup
 # Window: 5 months (approx 150 days)
@@ -47,8 +48,9 @@ st.markdown("Download the **Solve SF** app to submit reports: [iOS](https://apps
 st.markdown("---")
 
 # 4. Query
+# UPDATE: Added "AND service_name != 'Tree Maintenance'" to exclude tree tickets
 params = {
-    "$where": f"within_circle(point, {target_lat}, {target_lon}, {radius_meters}) AND requested_datetime > '{five_months_ago}' AND media_url IS NOT NULL",
+    "$where": f"within_circle(point, {target_lat}, {target_lon}, {radius_meters}) AND requested_datetime > '{five_months_ago}' AND media_url IS NOT NULL AND service_name != 'Tree Maintenance'",
     "$order": "requested_datetime DESC",
     "$limit": st.session_state.limit
 }
@@ -133,10 +135,10 @@ def get_image_info(media_item):
     
     # Case A: Standard Image (Public Cloud)
     if clean_url.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')):
-        return url, True # True = It's an image we can display inline
+        return url, True 
         
     # Case B: Portal Link (HTML wrapper)
-    return url, False # False = It's a link, but not an inline image
+    return url, False 
 
 # 7. Display Feed
 if not df.empty:
@@ -150,17 +152,14 @@ if not df.empty:
 
         full_url, is_image = get_image_info(row.get('media_url'))
         
-        # SHOW IF: It is an image OR it is a valid portal link
         if full_url:
             col_index = display_count % 4
             with cols[col_index]:
                 with st.container(border=True):
                     
-                    # LOGIC: If image, show it. If portal link, show placeholder button.
                     if is_image:
                         st.image(full_url, use_container_width=True)
                     else:
-                        # Placeholder for non-image links
                         st.markdown(f"""
                         <div style="background-color:#f0f2f6; height:200px; display:flex; align-items:center; justify-content:center; border-radius:10px; margin-bottom:10px;">
                             <a href="{full_url}" target="_blank" style="text-decoration:none; color:#333; font-weight:bold; text-align:center;">
@@ -175,11 +174,15 @@ if not df.empty:
                     else:
                         date_str = "?"
                     
-                    category = row.get('service_name', 'Unknown Issue')
+                    # UPDATE: Use 'service_subtype' instead of 'service_name'
+                    # We treat title casing and underscores for better readability
+                    raw_subtype = row.get('service_subtype', 'Unknown Issue')
+                    display_title = raw_subtype.replace('_', ' ').title()
+                    
                     address = row.get('address', 'Location N/A')
                     map_url = f"https://www.google.com/maps/search/?api=1&query={address.replace(' ', '+')}"
                     
-                    st.markdown(f"**{category}**")
+                    st.markdown(f"**{display_title}**")
                     st.markdown(f"{date_str} | [{address}]({map_url})")
             
             display_count += 1
@@ -192,7 +195,7 @@ if not df.empty:
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         if st.button(f"Load More Records (Current: {st.session_state.limit})"):
-            st.session_state.limit += 300
+            st.session_state.limit += 500
             st.rerun()
 
 else:
