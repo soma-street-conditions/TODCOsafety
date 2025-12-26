@@ -4,6 +4,7 @@ import requests
 import pydeck as pdk
 import math
 import re
+import base64
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs
 
@@ -140,7 +141,7 @@ with st.expander("🗺️ View Map & Incident Clusters", expanded=True):
 
 st.markdown("---")
 
-# 7. Helper: VERINT IMAGE CRACKER (PAYLOAD FUZZER)
+# 7. Helper: VERINT IMAGE CRACKER (BYTE SNIFFER)
 def fetch_verint_image(wrapper_url, debug_mode=False):
     logs = [] 
     try:
@@ -201,61 +202,37 @@ def fetch_verint_image(wrapper_url, debug_mode=False):
         api_base = "https://sanfrancisco.form.us.empro.verintcloudservices.com/api/custom"
         headers["Content-Type"] = "application/json"
         
-        # 1. Standard (What we've been using)
-        p1 = {
-            "caseid": str(url_case_id),
-            "data": {"formref": formref},
-            "name": "download_attachments",
-            "email": "", "xref": "", "xref1": "", "xref2": ""
-        }
-        
-        # 2. Nested CaseID
+        # 2. Nested CaseID (THE WINNER)
         p2 = {
             "data": {"caseid": str(url_case_id), "formref": formref},
             "name": "download_attachments",
             "email": "", "xref": "", "xref1": "", "xref2": ""
         }
         
-        # 3. Explicit FormData Key (Matches Turn 14 Response)
-        p3 = {
-             "caseid": str(url_case_id),
-             "data": {"formref": formref, "formdata_caseid": str(url_case_id)},
-             "name": "download_attachments",
-             "email": "", "xref": "", "xref1": "", "xref2": ""
-        }
-
-        payloads = [("Standard", p1), ("Nested", p2), ("FormData", p3)]
         success_payload = None
         raw_files = []
 
-        for name, payload in payloads:
-            r_list = session.post(
-                f"{api_base}?action=get_attachments_details&actionedby=&loadform=true&access=citizen&locale=en",
-                json=payload, headers=headers, timeout=5
-            )
+        r_list = session.post(
+            f"{api_base}?action=get_attachments_details&actionedby=&loadform=true&access=citizen&locale=en",
+            json=p2, headers=headers, timeout=5
+        )
+        
+        if r_list.status_code == 200:
+            files_data = r_list.json()
+            filename_str = ""
+            if 'data' in files_data and 'formdata_filenames' in files_data['data']:
+                filename_str = files_data['data']['formdata_filenames']
             
-            if r_list.status_code == 200:
-                files_data = r_list.json()
-                
-                # Check for explicit success or filenames
-                filename_str = ""
-                if 'data' in files_data and 'formdata_filenames' in files_data['data']:
-                    filename_str = files_data['data']['formdata_filenames']
-                
-                # If we got a string, we win
-                if filename_str:
-                    raw_files = filename_str.split(';')
-                    success_payload = payload # Save for next step
-                    if debug_mode: logs.append(f"✅ Step 3 Payload '{name}' SUCCEEDED!")
-                    break
-                else:
-                    if debug_mode: logs.append(f"⚠️ Step 3 Payload '{name}' Failed (casematch: no)")
+            if filename_str:
+                raw_files = filename_str.split(';')
+                success_payload = p2
+                if debug_mode: logs.append(f"✅ Step 3 Payload 'Nested' SUCCEEDED!")
             else:
-                 if debug_mode: logs.append(f"⚠️ Step 3 Payload '{name}' HTTP Error {r_list.status_code}")
-
-        if not success_payload:
-            if debug_mode: logs.append("❌ Step 3 Failed: All payloads rejected.")
-            return None, logs
+                if debug_mode: logs.append(f"❌ Step 3 Failed (casematch: no)")
+                return None, logs
+        else:
+             if debug_mode: logs.append(f"❌ Step 3 Failed HTTP {r_list.status_code}")
+             return None, logs
 
         # STEP 4: FILTER
         target_filename = None
@@ -270,8 +247,7 @@ def fetch_verint_image(wrapper_url, debug_mode=False):
              if debug_mode: logs.append("❌ Step 4 Failed: No valid image")
              return None, logs
 
-        # STEP 5: DOWNLOAD (Use successful structure)
-        # We need to inject the filename into the successful payload structure
+        # STEP 5: DOWNLOAD
         download_payload = success_payload.copy()
         download_payload["data"]["filename"] = target_filename
         
@@ -281,8 +257,15 @@ def fetch_verint_image(wrapper_url, debug_mode=False):
         )
         
         if r_image.status_code == 200:
-            if debug_mode: logs.append(f"✅ Step 5 OK: {len(r_image.content)} bytes")
-            return r_image.content, logs
+            content = r_image.content
+            if debug_mode: logs.append(f"✅ Step 5 OK: {len(content)} bytes")
+            
+            # --- BYTE INSPECTION ---
+            # Check First 10 bytes to identify file type
+            header = content[:20].hex()
+            if debug_mode: logs.append(f"ℹ️ File Header (Hex): {header}")
+            
+            return content, logs
         else:
              if debug_mode: logs.append(f"❌ Step 5 Failed: {r_image.status_code}")
              return None, logs
@@ -336,10 +319,14 @@ if not df.empty:
                         if media_type == "broken": st.error("\n".join(logs))
                         else: st.success("\n".join(logs))
                     
-                    if media_type == "url" or media_type == "bytes":
-                        st.image(media_content, width="stretch")
-                    else:
-                        st.image(media_content, width="stretch")
+                    # RENDER IMAGE (SAFE MODE)
+                    try:
+                        if media_type == "url" or media_type == "bytes":
+                            st.image(media_content, width="stretch")
+                        else:
+                            st.image(media_content, width="stretch")
+                    except Exception as e:
+                        st.error(f"Image Render Failed: {str(e)}")
 
                     if 'requested_datetime' in row:
                         date_str = pd.to_datetime(row['requested_datetime']).strftime('%b %d, %I:%M %p')
