@@ -224,18 +224,15 @@ def fetch_verint_image(wrapper_url, case_id):
         html = r_page.text
 
         # STEP 2: Extract Secrets
-        # Get formref
         formref_match = re.search(r'"formref"\s*:\s*"([^"]+)"', html)
         if not formref_match: return None
         formref = formref_match.group(1)
         
-        # Get CSRF Token
         csrf_match = re.search(r'name="_csrf_token"\s+content="([^"]+)"', html)
         csrf_token = csrf_match.group(1) if csrf_match else None
 
         # STEP 3: Get Filename String
         api_base = "https://sanfrancisco.form.us.empro.verintcloudservices.com/api/custom"
-        
         headers["Referer"] = wrapper_url
         headers["Origin"] = "https://sanfrancisco.form.us.empro.verintcloudservices.com"
         headers["Content-Type"] = "application/json"
@@ -258,7 +255,6 @@ def fetch_verint_image(wrapper_url, case_id):
         
         if r_list.status_code != 200: return None
         
-        # CRITICAL UPDATE: Handle "formdata_filenames" string
         files_data = r_list.json()
         filename_str = ""
         
@@ -267,7 +263,6 @@ def fetch_verint_image(wrapper_url, case_id):
             
         if not filename_str: return None
         
-        # Split "file1.jpg;file2.jpg;" into list
         raw_files = filename_str.split(';')
 
         # STEP 4: Select Valid Image
@@ -325,8 +320,8 @@ def get_image_content(media_item, case_id):
         if image_bytes:
             return image_bytes, "bytes"
 
-    # Case C: Fallback -> Return URL (will be a clickable link)
-    return url, "link"
+    # Case C: Fallback -> Return URL (will attempt to render and likely break if not an image)
+    return url, "url"
 
 # 8. Display Feed
 if not df.empty:
@@ -347,21 +342,9 @@ if not df.empty:
             with cols[col_index]:
                 with st.container(border=True):
                     
-                    # RENDER IMAGE OR BUTTON
-                    # FIXED: use_container_width -> width="stretch"
-                    if media_type == "url":
-                        st.image(media_content, width="stretch")
-                    elif media_type == "bytes":
-                        st.image(media_content, width="stretch")
-                    else:
-                        # Fallback Button
-                        st.markdown(f"""
-                        <div style="background-color:#f0f2f6; height:200px; display:flex; align-items:center; justify-content:center; border-radius:10px; margin-bottom:10px;">
-                            <a href="{media_content}" target="_blank" style="text-decoration:none; color:#333; font-weight:bold; text-align:center;">
-                                📷 View Evidence<br><span style="font-size:0.8rem; color:#666;">(External Portal)</span>
-                            </a>
-                        </div>
-                        """, unsafe_allow_html=True)
+                    # DEBUG MODE: Always try to render as image. 
+                    # If it fails (broken URL), it shows broken image icon.
+                    st.image(media_content, width="stretch")
                     
                     # Metadata
                     if 'requested_datetime' in row:
