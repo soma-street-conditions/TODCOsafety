@@ -176,10 +176,11 @@ with st.expander("🗺️ View Map & Incident Clusters", expanded=True):
         layers = [layer_circles]
 
     # Map View State
+    # UPDATE: Increased zoom from 15.5 -> 16.3 for a tighter view
     view_state = pdk.ViewState(
         latitude=avg_lat,
         longitude=avg_lon,
-        zoom=15.5, # Zoomed out slightly to see all 3 sites
+        zoom=16.3, 
         pitch=0,
     )
 
