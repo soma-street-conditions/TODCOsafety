@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import pydeck as pdk
 import math
+import re
 from datetime import datetime, timedelta
 
 # 1. Page Config
@@ -65,7 +66,6 @@ This independent dashboard monitors the immediate vicinity of three key properti
 **Monitored Locations:**
 """)
 
-# Display sites in columns for better readability
 c1, c2, c3 = st.columns(3)
 for i, site in enumerate(sites):
     with [c1, c2, c3][i]:
@@ -92,7 +92,7 @@ params = {
 def get_min_distance_to_any_site(row_lat, row_lon):
     """Returns the distance (in meters) to the closest of the 3 sites."""
     min_dist = float('inf')
-    R = 6371000  # Earth radius in meters
+    R = 6371000 
     
     for site in sites:
         lat1, lon1 = math.radians(site['lat']), math.radians(site['lon'])
@@ -138,13 +138,12 @@ def get_data(query_limit):
         if r.status_code == 200:
             df_data = pd.DataFrame(r.json())
             
-            # Clean and Extract Lat/Lon
             if not df_data.empty and 'point' in df_data.columns:
                 if 'lat' in df_data.columns and 'long' in df_data.columns:
                     df_data['lat'] = pd.to_numeric(df_data['lat'])
                     df_data['lon'] = pd.to_numeric(df_data['long'])
                     
-                    # --- STRICT PYTHON FILTER ---
+                    # Strict Python Filter
                     df_data['min_dist'] = df_data.apply(
                         lambda x: get_min_distance_to_any_site(x['lat'], x['lon']), axis=1
                     )
@@ -208,20 +207,83 @@ with st.expander("🗺️ View Map & Incident Clusters", expanded=True):
 
 st.markdown("---")
 
-# 7. Helper: Identify Image vs Portal Link
-def get_image_info(media_item):
+# 7. Helper: VERINT IMAGE CRACKER
+# This caches the image bytes so we don't re-download on every interaction
+@st.cache_data(show_spinner=False, ttl=3600)
+def fetch_verint_image(wrapper_url, case_id):
+    """
+    1. Visits the wrapper page.
+    2. Regex searches for the hidden 'formref' and 'filename'.
+    3. POSTs to the API to get the raw image.
+    """
+    try:
+        # Step 1: Get the wrapper page HTML
+        session = requests.Session()
+        r_page = session.get(wrapper_url, timeout=5)
+        if r_page.status_code != 200:
+            return None
+            
+        html = r_page.text
+        
+        # Step 2: Hunt for the variables using Regex
+        # We look for: formref: "XYZ" and filename: "ABC.jpg"
+        formref_match = re.search(r'formref:\s*"([^"]+)"', html)
+        filename_match = re.search(r'filename:\s*"([^"]+)"', html)
+        
+        if not formref_match or not filename_match:
+            return None
+            
+        formref = formref_match.group(1)
+        filename = filename_match.group(1)
+        
+        # Step 3: Construct the API Payload
+        api_url = "https://sanfrancisco.form.us.empro.verintcloudservices.com/api/custom?action=download_attachment&actionedby=&loadform=true&access=citizen&locale=en"
+        
+        payload = {
+            "caseid": str(case_id),
+            "data": {
+                "formref": formref,
+                "filename": filename
+            },
+            "email": "",
+            "name": "download_attachments",
+            "xref": "",
+            "xref1": "",
+            "xref2": ""
+        }
+        
+        # Step 4: Fire the POST request
+        r_image = session.post(api_url, json=payload, timeout=5)
+        
+        if r_image.status_code == 200:
+            return r_image.content # Return raw bytes
+            
+    except Exception as e:
+        return None
+        
+    return None
+
+def get_image_content(media_item, case_id):
+    """Returns either a URL (string) or Raw Bytes (for Verint)."""
     if not media_item: return None, False
     url = media_item.get('url') if isinstance(media_item, dict) else media_item
     if not url: return None, False
     
     clean_url = url.split('?')[0].lower()
     
-    # Case A: Standard Image (Public Cloud)
+    # Case A: Standard Image (Public Cloud) -> Return URL
     if clean_url.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')):
-        return url, True 
+        return url, "url"
     
-    # Case B: Portal Link (Fallback)
-    return url, False 
+    # Case B: Verint Wrapper -> Try to fetch bytes
+    # We only try this if it looks like a Verint wrapper (usually has caseid param)
+    if "caseid" in url.lower():
+        image_bytes = fetch_verint_image(url, case_id)
+        if image_bytes:
+            return image_bytes, "bytes"
+
+    # Case C: Fallback -> Return URL (will be a clickable link)
+    return url, "link"
 
 # 8. Display Feed
 if not df.empty:
@@ -233,19 +295,25 @@ if not df.empty:
         if 'duplicate' in notes:
             continue
 
-        full_url, is_image = get_image_info(row.get('media_url'))
+        # Get Image Data
+        case_id = row.get('service_request_id', '')
+        media_content, media_type = get_image_content(row.get('media_url'), case_id)
         
-        if full_url:
+        if media_content:
             col_index = display_count % 4
             with cols[col_index]:
                 with st.container(border=True):
                     
-                    if is_image:
-                        st.image(full_url, use_container_width=True)
+                    # RENDER IMAGE OR BUTTON
+                    if media_type == "url":
+                        st.image(media_content, use_container_width=True)
+                    elif media_type == "bytes":
+                        st.image(media_content, use_container_width=True)
                     else:
+                        # Fallback Button
                         st.markdown(f"""
                         <div style="background-color:#f0f2f6; height:200px; display:flex; align-items:center; justify-content:center; border-radius:10px; margin-bottom:10px;">
-                            <a href="{full_url}" target="_blank" style="text-decoration:none; color:#333; font-weight:bold; text-align:center;">
+                            <a href="{media_content}" target="_blank" style="text-decoration:none; color:#333; font-weight:bold; text-align:center;">
                                 📷 View Evidence<br><span style="font-size:0.8rem; color:#666;">(External Portal)</span>
                             </a>
                         </div>
@@ -261,38 +329,4 @@ if not df.empty:
                     display_title = raw_subtype.replace('_', ' ').title()
                     
                     address = row.get('address', 'Location N/A')
-                    map_url = f"https://www.google.com/maps/search/?api=1&query={address.replace(' ', '+')}"
-                    
-                    # Ticket Link
-                    ticket_id = row.get('service_request_id', '')
-                    if ticket_id:
-                        ticket_url = f"https://mobile311.sfgov.org/tickets/{ticket_id}"
-                        date_display = f"[{date_str}]({ticket_url})"
-                    else:
-                        date_display = date_str
-
-                    # Closest Property Logic
-                    site_name = get_closest_site_name(float(row['lat']), float(row['long']))
-                    
-                    st.markdown(f"**{display_title}**")
-                    st.markdown(f"{date_display} | [{address}]({map_url}) | **Near {site_name}**")
-            
-            display_count += 1
-            
-    if display_count == 0:
-        st.info("No records found with media evidence.")
-    
-    # Load More Button
-    st.markdown("---")
-    c1, c2, c3 = st.columns([1, 2, 1])
-    with c2:
-        if st.button(f"Load More Records (Current: {st.session_state.limit})"):
-            st.session_state.limit += 500
-            st.rerun()
-
-else:
-    st.info(f"No records found within 160ft of any monitored site in the last 5 months.")
-
-# Footer
-st.markdown("---")
-st.caption("Data source: [DataSF | Open Data Portal](https://data.sfgov.org/City-Infrastructure/311-Cases/vw6y-z8j6/about_data)")
+                    map_url = f"http://googleusercontent.com/maps.
