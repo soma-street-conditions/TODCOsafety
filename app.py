@@ -39,7 +39,7 @@ sites = [
 ]
 
 # 4. Header
-st.title("SOMA Public Safety Monitor")
+st.title("SOMA Public Safety Monitor v6")
 st.markdown("""
 **Subject Properties Managed By:** TODCO Group
 This independent dashboard monitors the immediate vicinity of three key properties in SOMA.
@@ -140,7 +140,7 @@ with st.expander("🗺️ View Map & Incident Clusters", expanded=True):
 
 st.markdown("---")
 
-# 7. Helper: VERINT IMAGE CRACKER (URL KEY FIX)
+# 7. Helper: VERINT IMAGE CRACKER (FRESH KEY FIX)
 def fetch_verint_image(wrapper_url, debug_mode=False):
     logs = [] 
     try:
@@ -150,42 +150,39 @@ def fetch_verint_image(wrapper_url, debug_mode=False):
             "Referer": "https://mobile311.sfgov.org/",
         }
 
-        # STEP 1: VISIT PAGE TO GET FINAL URL & COOKIES
+        # A. EXTRACT CASE ID FROM URL (Trust this over dataframe)
+        parsed = urlparse(wrapper_url)
+        qs = parse_qs(parsed.query)
+        url_case_id = qs.get('caseid', [None])[0]
+        
+        if not url_case_id:
+             if debug_mode: logs.append("❌ Step 0 Failed: No caseid in URL")
+             return None, logs
+
+        if debug_mode: logs.append(f"ℹ️ Synced Case ID: {url_case_id}")
+
+        # STEP 1: VISIT PAGE (Start Session & Get HTML)
         r_page = session.get(wrapper_url, headers=headers, timeout=5)
         if r_page.status_code != 200:
             if debug_mode: logs.append(f"❌ Step 1 Failed: {r_page.status_code}")
             return None, logs
         
-        final_url = r_page.url 
+        final_referer = r_page.url 
         html = r_page.text
         if debug_mode: logs.append("✅ Step 1 OK")
 
-        # STEP 2: EXTRACT SECRETS (PRIORITIZE URL!)
-        parsed_url = urlparse(final_url)
-        qs = parse_qs(parsed_url.query)
+        # STEP 2: EXTRACT FRESH SECRETS FROM HTML
+        # CRITICAL FIX: IGNORE URL FORMREF. FIND THE ONE IN THE SCRIPT.
         
-        # A. Extract formref from URL (The "Golden Key")
-        url_formref = qs.get('formref', [None])[0]
+        # Look for "formref":"XYZ" inside the script tags
+        formref_match = re.search(r'"formref"\s*:\s*"([^"]+)"', html)
+        if not formref_match:
+            if debug_mode: logs.append("❌ Step 2 Failed: No FRESH formref found in HTML")
+            return None, logs
+        formref = formref_match.group(1)
         
-        if url_formref:
-             formref = url_formref
-             if debug_mode: logs.append(f"✅ Step 2: Found 'formref' in URL: {formref}")
-        else:
-             # Fallback to HTML scraping (less reliable)
-             formref_match = re.search(r'"formref"\s*:\s*"([^"]+)"', html)
-             if not formref_match:
-                 if debug_mode: logs.append("❌ Step 2 Failed: No formref found")
-                 return None, logs
-             formref = formref_match.group(1)
-             if debug_mode: logs.append(f"⚠️ Step 2: Fallback to HTML formref: {formref}")
+        if debug_mode: logs.append(f"✅ Step 2: Found FRESH formref: {formref}")
 
-        # B. Extract Case ID from URL (to ensure match)
-        url_case_id = qs.get('caseid', [None])[0]
-        if not url_case_id:
-             if debug_mode: logs.append("❌ Step 2 Failed: No caseid in URL")
-             return None, logs
-
-        # C. Extract CSRF (HTML only)
         csrf_match = re.search(r'name="_csrf_token"\s+content="([^"]+)"', html)
         csrf_token = csrf_match.group(1) if csrf_match else None
         
@@ -195,7 +192,7 @@ def fetch_verint_image(wrapper_url, debug_mode=False):
         auth_token = None
         try:
             citizen_url = "https://sanfrancisco.form.us.empro.verintcloudservices.com/api/citizen?archived=Y&preview=false&locale=en"
-            headers["Referer"] = final_url
+            headers["Referer"] = final_referer
             headers["Origin"] = "https://sanfrancisco.form.us.empro.verintcloudservices.com"
             if csrf_token: headers["X-CSRF-TOKEN"] = csrf_token
             
@@ -214,8 +211,8 @@ def fetch_verint_image(wrapper_url, debug_mode=False):
         headers["Content-Type"] = "application/json"
         
         details_payload = {
-            "caseid": str(url_case_id), 
-            "data": {"formref": formref}, # Using URL formref!
+            "caseid": str(url_case_id), # SYNCED ID
+            "data": {"formref": formref}, # FRESH KEY
             "name": "download_attachments",
             "email": "", "xref": "", "xref1": "", "xref2": ""
         }
@@ -291,6 +288,7 @@ def get_image_content(media_item, case_id, debug_flag=False):
     
     # 2. Verint Logic
     if "caseid" in url.lower():
+        # NOTE: We ignore the 'case_id' argument here and let the function parse the URL
         image_bytes, debug_logs = fetch_verint_image(url, debug_flag)
         if image_bytes: return image_bytes, "bytes", debug_logs
         return url, "broken", debug_logs
