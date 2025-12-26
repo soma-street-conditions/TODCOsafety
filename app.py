@@ -207,43 +207,62 @@ with st.expander("🗺️ View Map & Incident Clusters", expanded=True):
 
 st.markdown("---")
 
-# 7. Helper: VERINT IMAGE CRACKER (Final Logic)
-@st.cache_data(show_spinner=False, ttl=3600)
-def fetch_verint_image(wrapper_url, case_id):
+# 7. Helper: VERINT IMAGE CRACKER (Debug + Payload Fix)
+# Removing Cache Temporarily to force retries while debugging
+# @st.cache_data(show_spinner=False, ttl=3600)
+def fetch_verint_image(wrapper_url, case_id, debug_mode=False):
+    logs = [] # Store debug logs
     try:
-        # Standard Headers
+        session = requests.Session()
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Referer": "https://mobile311.sfgov.org/",
         }
-        session = requests.Session()
 
         # STEP 1: Get Page HTML
         r_page = session.get(wrapper_url, headers=headers, timeout=5)
-        if r_page.status_code != 200: return None
+        if r_page.status_code != 200:
+            if debug_mode: return None, [f"Step 1 Failed: {r_page.status_code}"]
+            return None, []
+        
+        # Capture the FINAL url (after redirects) to use as Referer
+        final_referer = r_page.url 
         html = r_page.text
+        
+        if debug_mode: logs.append(f"Step 1 OK. Final URL: {final_referer}")
 
         # STEP 2: Extract Secrets
         formref_match = re.search(r'"formref"\s*:\s*"([^"]+)"', html)
-        if not formref_match: return None
+        if not formref_match:
+            if debug_mode: logs.append("Step 2 Failed: No formref found in HTML")
+            return None, logs
         formref = formref_match.group(1)
         
         csrf_match = re.search(r'name="_csrf_token"\s+content="([^"]+)"', html)
         csrf_token = csrf_match.group(1) if csrf_match else None
+        
+        if debug_mode: logs.append(f"Step 2 OK. Formref: {formref}, CSRF Found: {bool(csrf_token)}")
 
         # STEP 3: Get Filename String
         api_base = "https://sanfrancisco.form.us.empro.verintcloudservices.com/api/custom"
-        headers["Referer"] = wrapper_url
+        
+        # Update headers for API
+        headers["Referer"] = final_referer
         headers["Origin"] = "https://sanfrancisco.form.us.empro.verintcloudservices.com"
         headers["Content-Type"] = "application/json"
         
         if csrf_token:
             headers["X-CSRF-TOKEN"] = csrf_token
         
+        # IMPORTANT: Payload must match EXACTLY what browser sends (empty fields included)
         details_payload = {
             "caseid": str(case_id),
             "data": {"formref": formref},
-            "name": "download_attachments"
+            "name": "download_attachments",
+            "email": "",
+            "xref": "",
+            "xref1": "",
+            "xref2": ""
         }
 
         r_list = session.post(
@@ -253,7 +272,9 @@ def fetch_verint_image(wrapper_url, case_id):
             timeout=5
         )
         
-        if r_list.status_code != 200: return None
+        if r_list.status_code != 200:
+            if debug_mode: logs.append(f"Step 3 Failed: API returned {r_list.status_code}")
+            return None, logs
         
         files_data = r_list.json()
         filename_str = ""
@@ -261,22 +282,25 @@ def fetch_verint_image(wrapper_url, case_id):
         if 'data' in files_data and 'formdata_filenames' in files_data['data']:
             filename_str = files_data['data']['formdata_filenames']
             
-        if not filename_str: return None
-        
+        if not filename_str:
+            if debug_mode: logs.append("Step 3 Failed: No filenames in JSON")
+            return None, logs
+            
         raw_files = filename_str.split(';')
+        if debug_mode: logs.append(f"Step 3 OK. Files found: {raw_files}")
 
         # STEP 4: Select Valid Image
         target_filename = None
         for fname in raw_files:
             fname = fname.strip()
             if not fname: continue
-            
-            # Ignore maps (*m.jpg) and look for images
             if not fname.lower().endswith('m.jpg') and fname.lower().endswith(('.jpg', '.jpeg', '.png')):
                 target_filename = fname
                 break
         
-        if not target_filename: return None
+        if not target_filename: 
+             if debug_mode: logs.append("Step 4 Failed: No valid image file found (only map?)")
+             return None, logs
 
         # STEP 5: Download
         download_payload = {
@@ -285,7 +309,11 @@ def fetch_verint_image(wrapper_url, case_id):
                 "formref": formref,
                 "filename": target_filename
             },
-            "name": "download_attachments"
+            "name": "download_attachments",
+            "email": "",
+            "xref": "",
+            "xref1": "",
+            "xref2": ""
         }
 
         r_image = session.post(
@@ -296,32 +324,37 @@ def fetch_verint_image(wrapper_url, case_id):
         )
         
         if r_image.status_code == 200:
-            return r_image.content
+            return r_image.content, logs
+        else:
+             if debug_mode: logs.append(f"Step 5 Failed: Download returned {r_image.status_code}")
+             return None, logs
             
-    except Exception:
-        return None
-    return None
+    except Exception as e:
+        if debug_mode: logs.append(f"Exception: {str(e)}")
+        return None, logs
+    return None, logs
 
-def get_image_content(media_item, case_id):
+def get_image_content(media_item, case_id, debug_flag=False):
     """Returns either a URL (string) or Raw Bytes (for Verint)."""
-    if not media_item: return None, False
+    if not media_item: return None, False, []
     url = media_item.get('url') if isinstance(media_item, dict) else media_item
-    if not url: return None, False
+    if not url: return None, False, []
     
     clean_url = url.split('?')[0].lower()
     
-    # Case A: Standard Image (Public Cloud) -> Return URL
+    # Case A: Standard Image
     if clean_url.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')):
-        return url, "url"
+        return url, "url", []
     
-    # Case B: Verint Wrapper -> Try to fetch bytes
+    # Case B: Verint Wrapper
     if "caseid" in clean_url:
-        image_bytes = fetch_verint_image(url, case_id)
+        image_bytes, debug_logs = fetch_verint_image(url, case_id, debug_flag)
         if image_bytes:
-            return image_bytes, "bytes"
+            return image_bytes, "bytes", debug_logs
+        return url, "broken", debug_logs # Return logs on failure
 
-    # Case C: Fallback -> Return URL (will attempt to render and likely break if not an image)
-    return url, "url"
+    # Case C: Fallback
+    return url, "url", []
 
 # 8. Display Feed
 if not df.empty:
@@ -333,18 +366,28 @@ if not df.empty:
         if 'duplicate' in notes:
             continue
 
+        # Enable Debug Mode for the VERY FIRST ITEM ONLY
+        is_first_item = (display_count == 0)
+        
         # Get Image Data
         case_id = row.get('service_request_id', '')
-        media_content, media_type = get_image_content(row.get('media_url'), case_id)
+        media_content, media_type, logs = get_image_content(row.get('media_url'), case_id, debug_flag=is_first_item)
         
         if media_content:
             col_index = display_count % 4
             with cols[col_index]:
                 with st.container(border=True):
                     
-                    # DEBUG MODE: Always try to render as image. 
-                    # If it fails (broken URL), it shows broken image icon.
-                    st.image(media_content, width="stretch")
+                    # RENDER IMAGE
+                    if media_type == "url" or media_type == "bytes":
+                        st.image(media_content, width="stretch")
+                    else:
+                        # Broken image placeholder that Streamlit renders for HTML pages
+                        st.image(media_content, width="stretch")
+                        
+                        # DEBUG OUTPUT (Only if this was the first item and it failed)
+                        if is_first_item and logs:
+                            st.error(f"DEBUG: {logs}")
                     
                     # Metadata
                     if 'requested_datetime' in row:
