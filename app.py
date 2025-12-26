@@ -5,9 +5,10 @@ import pydeck as pdk
 import math
 import re
 from datetime import datetime, timedelta
+from urllib.parse import urlparse, parse_qs
 
 # 1. Page Config
-st.set_page_config(page_title="TODCO Safety Monitor", page_icon="🚨", layout="wide")
+st.set_page_config(page_title="TODCO Safety Monitor v1", page_icon="🚨", layout="wide")
 
 # --- STYLING ---
 st.markdown("""
@@ -139,65 +140,74 @@ with st.expander("🗺️ View Map & Incident Clusters", expanded=True):
 
 st.markdown("---")
 
-# 7. Helper: VERINT IMAGE CRACKER (Session Sync Fix)
-def fetch_verint_image(wrapper_url, case_id, debug_mode=False):
+# 7. Helper: VERINT IMAGE CRACKER (ID Sync Fix)
+def fetch_verint_image(wrapper_url, debug_mode=False):
     logs = [] 
     try:
         session = requests.Session()
-        # Common headers
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Referer": "https://mobile311.sfgov.org/",
         }
 
-        # STEP 1: HANDSHAKE FIRST (Establish Session)
-        auth_token = None
-        try:
-            citizen_url = "https://sanfrancisco.form.us.empro.verintcloudservices.com/api/citizen?archived=Y&preview=false&locale=en"
-            headers["Origin"] = "https://sanfrancisco.form.us.empro.verintcloudservices.com"
-            
-            r_handshake = session.get(citizen_url, headers=headers, timeout=5)
-            if 'Authorization' in r_handshake.headers:
-                auth_token = r_handshake.headers['Authorization']
-                headers["Authorization"] = auth_token
-                if debug_mode: logs.append(f"✅ Step 1 Handshake OK. Token: {auth_token[:10]}...")
-            else:
-                # If no token, we might still be okay if cookies were set
-                if debug_mode: logs.append(f"⚠️ Step 1 Warning: No Auth header (Status: {r_handshake.status_code})")
-        except Exception as e:
-            if debug_mode: logs.append(f"⚠️ Step 1 Failed: {str(e)}")
+        # EXTRACT CASE ID DIRECTLY FROM URL (Crucial Fix)
+        # We ignore the passed ID and trust the URL
+        parsed = urlparse(wrapper_url)
+        qs = parse_qs(parsed.query)
+        url_case_id = qs.get('caseid', [None])[0]
+        
+        if not url_case_id:
+             if debug_mode: logs.append("❌ Step 0 Failed: Could not find caseid in URL")
+             return None, logs
 
-        # STEP 2: VISIT PAGE (With Session + Token)
-        # We need to visit the page to get the 'formref' and 'csrf' that match the session we just started
+        if debug_mode: logs.append(f"ℹ️ Target Case ID (from URL): {url_case_id}")
+
+        # STEP 1: VISIT PAGE (Start Session)
         r_page = session.get(wrapper_url, headers=headers, timeout=5)
         if r_page.status_code != 200:
-            if debug_mode: logs.append(f"❌ Step 2 Failed: Page load {r_page.status_code}")
+            if debug_mode: logs.append(f"❌ Step 1 Failed: {r_page.status_code}")
             return None, logs
         
         final_referer = r_page.url 
         html = r_page.text
-        if debug_mode: logs.append("✅ Step 2 OK: Page Loaded")
+        if debug_mode: logs.append("✅ Step 1 OK")
 
-        # STEP 3: EXTRACT SECRETS
+        # STEP 2: EXTRACT SECRETS
         formref_match = re.search(r'"formref"\s*:\s*"([^"]+)"', html)
         if not formref_match:
-            if debug_mode: logs.append("❌ Step 3 Failed: No formref")
+            if debug_mode: logs.append("❌ Step 2 Failed: No formref")
             return None, logs
         formref = formref_match.group(1)
         
         csrf_match = re.search(r'name="_csrf_token"\s+content="([^"]+)"', html)
         csrf_token = csrf_match.group(1) if csrf_match else None
         
-        if debug_mode: logs.append(f"✅ Step 3 OK (CSRF: {bool(csrf_token)})")
+        if debug_mode: logs.append(f"✅ Step 2 OK (CSRF: {bool(csrf_token)})")
 
-        # STEP 4: GET FILES
+        # STEP 2.5: HANDSHAKE (Get Token)
+        auth_token = None
+        try:
+            citizen_url = "https://sanfrancisco.form.us.empro.verintcloudservices.com/api/citizen?archived=Y&preview=false&locale=en"
+            headers["Referer"] = final_referer
+            headers["Origin"] = "https://sanfrancisco.form.us.empro.verintcloudservices.com"
+            if csrf_token: headers["X-CSRF-TOKEN"] = csrf_token
+            
+            r_handshake = session.get(citizen_url, headers=headers, timeout=5)
+            if 'Authorization' in r_handshake.headers:
+                auth_token = r_handshake.headers['Authorization']
+                headers["Authorization"] = auth_token
+                if debug_mode: logs.append(f"✅ Step 2.5 Handshake OK.")
+            else:
+                if debug_mode: logs.append(f"⚠️ Step 2.5 Warning: No Auth header")
+        except Exception as e:
+            if debug_mode: logs.append(f"⚠️ Step 2.5 Failed: {str(e)}")
+
+        # STEP 3: GET FILES (Using URL Case ID)
         api_base = "https://sanfrancisco.form.us.empro.verintcloudservices.com/api/custom"
         headers["Content-Type"] = "application/json"
-        headers["Referer"] = final_referer
-        if csrf_token: headers["X-CSRF-TOKEN"] = csrf_token
         
         details_payload = {
-            "caseid": str(case_id),
+            "caseid": str(url_case_id), # USING URL ID
             "data": {"formref": formref},
             "name": "download_attachments",
             "email": "", "xref": "", "xref1": "", "xref2": ""
@@ -209,7 +219,7 @@ def fetch_verint_image(wrapper_url, case_id, debug_mode=False):
         )
         
         if r_list.status_code != 200:
-            if debug_mode: logs.append(f"❌ Step 4 Failed: API returned {r_list.status_code}")
+            if debug_mode: logs.append(f"❌ Step 3 Failed: {r_list.status_code}")
             return None, logs
         
         files_data = r_list.json()
@@ -218,14 +228,13 @@ def fetch_verint_image(wrapper_url, case_id, debug_mode=False):
             filename_str = files_data['data']['formdata_filenames']
             
         if not filename_str:
-            # Dump JSON for debugging if it fails
-            if debug_mode: logs.append(f"❌ Step 4 Failed: {str(files_data)[:200]}")
+            if debug_mode: logs.append(f"❌ Step 3 Failed: No filenames. JSON: {str(files_data)[:200]}")
             return None, logs
             
         raw_files = filename_str.split(';')
-        if debug_mode: logs.append(f"✅ Step 4 OK: {len(raw_files)} files")
+        if debug_mode: logs.append(f"✅ Step 3 OK: {len(raw_files)} files")
 
-        # STEP 5: FILTER
+        # STEP 4: FILTER
         target_filename = None
         for fname in raw_files:
             fname = fname.strip()
@@ -235,12 +244,12 @@ def fetch_verint_image(wrapper_url, case_id, debug_mode=False):
                 break
         
         if not target_filename: 
-             if debug_mode: logs.append("❌ Step 5 Failed: No valid image")
+             if debug_mode: logs.append("❌ Step 4 Failed: No valid image")
              return None, logs
 
-        # STEP 6: DOWNLOAD
+        # STEP 5: DOWNLOAD
         download_payload = {
-            "caseid": str(case_id),
+            "caseid": str(url_case_id), # USING URL ID
             "data": {"formref": formref, "filename": target_filename},
             "name": "download_attachments",
             "email": "", "xref": "", "xref1": "", "xref2": ""
@@ -252,10 +261,10 @@ def fetch_verint_image(wrapper_url, case_id, debug_mode=False):
         )
         
         if r_image.status_code == 200:
-            if debug_mode: logs.append(f"✅ Step 6 OK: {len(r_image.content)} bytes")
+            if debug_mode: logs.append(f"✅ Step 5 OK: {len(r_image.content)} bytes")
             return r_image.content, logs
         else:
-             if debug_mode: logs.append(f"❌ Step 6 Failed: {r_image.status_code}")
+             if debug_mode: logs.append(f"❌ Step 5 Failed: {r_image.status_code}")
              return None, logs
             
     except Exception as e:
@@ -275,7 +284,8 @@ def get_image_content(media_item, case_id, debug_flag=False):
     
     # 2. Verint Logic
     if "caseid" in url.lower():
-        image_bytes, debug_logs = fetch_verint_image(url, case_id, debug_flag)
+        # NOTE: We ignore the 'case_id' argument here and let the function parse the URL
+        image_bytes, debug_logs = fetch_verint_image(url, debug_flag)
         if image_bytes: return image_bytes, "bytes", debug_logs
         return url, "broken", debug_logs
 
