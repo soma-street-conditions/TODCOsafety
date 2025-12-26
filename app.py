@@ -6,65 +6,108 @@ import math
 from datetime import datetime, timedelta
 
 # 1. Page Config
-st.set_page_config(page_title="Knox SRO Safety Monitor", page_icon="🚨", layout="wide")
+st.set_page_config(page_title="TODCO Safety Monitor", page_icon="🚨", layout="wide")
 
-# --- NO CRAWL & STYLING ---
+# --- STYLING ---
 st.markdown("""
     <style>
         div[data-testid="stVerticalBlock"] > div { gap: 0.2rem; }
-        .stMarkdown p { font-size: 0.9rem; margin-bottom: 0px; }
-        div.stButton > button { width: 100%; }
-        .report-text { font-size: 1.1rem; line-height: 1.5; color: #333; }
+        .stMarkdown p { font-size: 0.95rem; line-height: 1.5; margin-bottom: 10px; }
+        .stMarkdown h2 { padding-top: 1rem; }
+        div.stButton > button { width: 100%; border-radius: 5px; }
+        .site-card { background-color: #f8f9fa; padding: 10px; border-radius: 5px; margin-bottom: 10px; }
     </style>
     <meta name="robots" content="noindex, nofollow">
 """, unsafe_allow_html=True)
 
-# 2. Session State for "Load More"
+# 2. Session State
 if 'limit' not in st.session_state:
     st.session_state.limit = 2000
 
-# 3. Date & API Setup
+# 3. Configuration & Sites
 five_months_ago = (datetime.now() - timedelta(days=150)).strftime('%Y-%m-%dT%H:%M:%S')
 base_url = "https://data.sfgov.org/resource/vw6y-z8j6.json"
-
-# TARGET COORDINATES
-target_lat = 37.77947681979851
-target_lon = -122.40646722115551
 radius_meters = 48.8  # ~160 feet
 
-# Header & Executive Briefing
-st.header("Knox SRO: Public Safety Impact Report")
+# SITE CONFIGURATION
+sites = [
+    {
+        "name": "Knox SRO",
+        "address": "241 6th Street",
+        "lat": 37.77947681979851,
+        "lon": -122.40646722115551
+    },
+    {
+        "name": "Bayanihan House",
+        "address": "88 6th Street",
+        "lat": 37.78092868326207,
+        "lon": -122.40917338372577
+    },
+    {
+        "name": "Hotel Isabel",
+        "address": "1095 Mission Street",
+        "lat": 37.779223991574554,
+        "lon": -122.41056224966958
+    }
+]
 
-st.markdown(f"""
-**Location:** 241 6th Street (The Knox SRO) | **Operator:** TODCO
+# 4. Header & Executive Text
+st.title("TODCO Properties: Public Safety Impact Report")
 
-This dashboard monitors the immediate vicinity of the Knox SRO, identifying it as a persistent focal point for street-level disorder. Data suggests that current management practices and security measures are insufficient, contributing to an environment of open-air drug activity, violence, and unsafe conditions for local residents.
+st.markdown("""
+**Operator:** TODCO Group
 
-The feed below aggregates real-time 311 service requests filed within **160 feet** of the building's entrance, providing a documented timeline of the public safety challenges at this specific location.
+This dashboard monitors the immediate vicinity of three key TODCO-managed properties in SOMA. It aggregates real-time 311 service requests filed within **160 feet** of each building's entrance to identify persistent patterns of disorder, including open-air drug activity, violence, and unsafe street conditions.
+
+**Monitored Locations:**
 """)
 
+# Display sites in columns for better readability
+c1, c2, c3 = st.columns(3)
+for i, site in enumerate(sites):
+    with [c1, c2, c3][i]:
+        st.info(f"**{site['name']}**\n\n📍 {site['address']}")
+
+st.markdown("---")
 st.markdown("Download the **Solve SF** app to submit reports: [iOS](https://apps.apple.com/us/app/solve-sf/id6737751237) | [Android](https://play.google.com/store/apps/details?id=com.woahfinally.solvesf)")
 st.markdown("---")
 
-# 4. Query
+# 5. Dynamic Query Construction
+# Build a query that checks: (Circle 1 OR Circle 2 OR Circle 3)
+location_clauses = [
+    f"within_circle(point, {s['lat']}, {s['lon']}, {radius_meters})" 
+    for s in sites
+]
+location_filter = f"({' OR '.join(location_clauses)})"
+
 params = {
-    "$where": f"within_circle(point, {target_lat}, {target_lon}, {radius_meters}) AND requested_datetime > '{five_months_ago}' AND media_url IS NOT NULL AND service_name != 'Tree Maintenance'",
+    "$where": f"{location_filter} AND requested_datetime > '{five_months_ago}' AND media_url IS NOT NULL AND service_name != 'Tree Maintenance'",
     "$order": "requested_datetime DESC",
     "$limit": st.session_state.limit
 }
 
-# --- NEW: DISTANCE CALCULATION HELPER ---
-def calculate_distance(lat1, lon1, lat2, lon2):
-    # Haversine formula for strict distance calculation
-    R = 6371000  # Radius of Earth in meters
-    phi1, phi2 = math.radians(lat1), math.radians(lat2) 
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
-    c = 2*math.atan2(math.sqrt(a), math.sqrt(1-a))
-    return R*c
+# --- DISTANCE CALCULATION HELPER ---
+def get_min_distance_to_any_site(row_lat, row_lon):
+    """Returns the distance (in meters) to the closest of the 3 sites."""
+    min_dist = float('inf')
+    R = 6371000  # Earth radius in meters
+    
+    for site in sites:
+        lat1, lon1 = math.radians(site['lat']), math.radians(site['lon'])
+        lat2, lon2 = math.radians(row_lat), math.radians(row_lon)
+        
+        dphi = lat2 - lat1
+        dlambda = lon2 - lon1
+        a = math.sin(dphi/2)**2 + math.cos(lat1)*math.cos(lat2)*math.sin(dlambda/2)**2
+        c = 2*math.atan2(math.sqrt(a), math.sqrt(1-a))
+        dist = R*c
+        
+        if dist < min_dist:
+            min_dist = dist
+            
+    return min_dist
 
-# 5. Fetch Data
+# 6. Fetch Data
 @st.cache_data(ttl=300)
 def get_data(query_limit):
     try:
@@ -79,12 +122,11 @@ def get_data(query_limit):
                     df_data['lon'] = pd.to_numeric(df_data['long'])
                     
                     # --- STRICT PYTHON FILTER ---
-                    # Calculate exact distance for every point and filter out any that exceed radius
-                    # This ensures the map visualization is 100% accurate to the circle.
-                    df_data['dist_m'] = df_data.apply(
-                        lambda x: calculate_distance(target_lat, target_lon, x['lat'], x['lon']), axis=1
+                    # Keep row if it is within radius of ANY of the 3 sites
+                    df_data['min_dist'] = df_data.apply(
+                        lambda x: get_min_distance_to_any_site(x['lat'], x['lon']), axis=1
                     )
-                    df_data = df_data[df_data['dist_m'] <= radius_meters]
+                    df_data = df_data[df_data['min_dist'] <= radius_meters]
                     
             return df_data
         else:
@@ -95,26 +137,31 @@ def get_data(query_limit):
 df = get_data(st.session_state.limit)
 
 # --- MAP SECTION ---
-with st.expander("🗺️ View Map & Incident Distribution", expanded=False):
-    if not df.empty and 'lat' in df.columns:
-        # Layer 1: The Target Radius (Red Circle)
-        target_data = pd.DataFrame({'lat': [target_lat], 'lon': [target_lon]})
-        
-        layer_radius = pdk.Layer(
-            "ScatterplotLayer",
-            target_data,
-            get_position='[lon, lat]',
-            get_color=[255, 0, 0, 50],
-            get_radius=radius_meters,
-            stroked=True,
-            get_line_color=[255, 0, 0, 200],
-            get_line_width=2,
-            radius_scale=1,
-            radius_min_pixels=1,
-            radius_max_pixels=1000,
-        )
+with st.expander("🗺️ View Map & Incident Clusters", expanded=True):
+    # Calculate the center of the map (average of all sites)
+    avg_lat = sum(s['lat'] for s in sites) / len(sites)
+    avg_lon = sum(s['lon'] for s in sites) / len(sites)
 
-        # Layer 2: The Reports (Blue Dots)
+    # Layer 1: The Target Radii (Red Circles for ALL sites)
+    # We create a dataframe from the 'sites' list
+    sites_df = pd.DataFrame(sites)
+    
+    layer_circles = pdk.Layer(
+        "ScatterplotLayer",
+        sites_df,
+        get_position='[lon, lat]',
+        get_color=[255, 0, 0, 50],     # Faint Red Fill
+        get_radius=radius_meters,      # 160ft
+        stroked=True,
+        get_line_color=[255, 0, 0, 200], # Solid Red Outline
+        get_line_width=2,
+        radius_scale=1,
+        radius_min_pixels=1,
+        radius_max_pixels=1000,
+    )
+
+    # Layer 2: The Reports (Blue Dots)
+    if not df.empty and 'lat' in df.columns:
         layer_points = pdk.Layer(
             "ScatterplotLayer",
             df,
@@ -123,27 +170,28 @@ with st.expander("🗺️ View Map & Incident Distribution", expanded=False):
             get_radius=3, 
             pickable=True,
         )
-
-        # Map View State
-        view_state = pdk.ViewState(
-            latitude=target_lat,
-            longitude=target_lon,
-            zoom=18,
-            pitch=0,
-        )
-
-        st.pydeck_chart(pdk.Deck(
-            map_style=pdk.map_styles.CARTO_LIGHT,
-            initial_view_state=view_state,
-            layers=[layer_radius, layer_points],
-            tooltip={"text": "{service_subtype}\n{requested_datetime}"}
-        ))
+        layers = [layer_circles, layer_points]
     else:
-        st.info("Map data unavailable or no records found.")
+        layers = [layer_circles]
+
+    # Map View State
+    view_state = pdk.ViewState(
+        latitude=avg_lat,
+        longitude=avg_lon,
+        zoom=15.5, # Zoomed out slightly to see all 3 sites
+        pitch=0,
+    )
+
+    st.pydeck_chart(pdk.Deck(
+        map_style=pdk.map_styles.CARTO_LIGHT,
+        initial_view_state=view_state,
+        layers=layers,
+        tooltip={"text": "{service_subtype}\n{requested_datetime}"}
+    ))
 
 st.markdown("---")
 
-# 6. Helper: Identify Image vs Portal Link
+# 7. Helper: Identify Image vs Portal Link
 def get_image_info(media_item):
     if not media_item: return None, False
     url = media_item.get('url') if isinstance(media_item, dict) else media_item
@@ -154,7 +202,7 @@ def get_image_info(media_item):
         return url, True 
     return url, False 
 
-# 7. Display Feed
+# 8. Display Feed
 if not df.empty:
     cols = st.columns(4)
     display_count = 0
@@ -210,7 +258,7 @@ if not df.empty:
             st.rerun()
 
 else:
-    st.info(f"No records found within 160ft of target in the last 5 months.")
+    st.info(f"No records found within 160ft of any monitored site in the last 5 months.")
 
 # Footer
 st.markdown("---")
