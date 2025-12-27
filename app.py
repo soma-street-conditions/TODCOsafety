@@ -41,7 +41,7 @@ sites = [
     {"name": "Hotel Isabel", "short_name": "Isabel", "address": "1095 Mission Street", "lat": 37.779230374811554, "lon": -122.4107826194545}
 ]
 
-# 4. Header & Executive Text (UPDATED)
+# 4. Header & Executive Text
 st.title("SOMA Neighborhood Safety Monitor: TODCO Portfolio Watch")
 st.markdown("### Daily feed of public safety and sanitation incidents surrounding TODCO-managed properties.")
 
@@ -73,7 +73,8 @@ exclusions = [
     "service_subtype != 'Add_remove_garbage_can'",
     "service_subtype != 'City_garbage_can_overflowing'",
     "service_subtype != 'Pavement_Defect'",
-    "service_subtype != 'Sidewalk_Defect'"
+    "service_subtype != 'Sidewalk_Defect'",
+    "service_subtype != 'other_garbage_can_repair'"
 ]
 exclusion_string = " AND ".join(exclusions)
 
