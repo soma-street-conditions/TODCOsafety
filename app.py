@@ -25,7 +25,7 @@ st.markdown("""
     <meta name="robots" content="noindex, nofollow">
 """, unsafe_allow_html=True)
 
-# 2. Session State (UPDATED LIMIT TO 200)
+# 2. Session State
 if 'limit' not in st.session_state:
     st.session_state.limit = 200
 
@@ -62,19 +62,39 @@ st.markdown("---")
 location_clauses = [f"within_circle(point, {s['lat']}, {s['lon']}, {radius_meters})" for s in sites]
 location_filter = f"({' OR '.join(location_clauses)})"
 
-# EXCLUSION LIST
+# --- EXCLUSION LIST (Updated) ---
 exclusions = [
+    # Original Filters
     "service_name != 'Tree Maintenance'",
     "service_subtype != 'garbage_and_debris'",
     "service_subtype != 'not_offensive'",
     "service_subtype != 'Toters_left_out_24x7'",
-    "service_subtype != 'Other_including_abandoned_toter'",
-    "service_subtype != 'Other_Illegal_Parking'",
     "service_subtype != 'Add_remove_garbage_can'",
     "service_subtype != 'City_garbage_can_overflowing'",
-    "service_subtype != 'Pavement_Defect'",
     "service_subtype != 'Sidewalk_Defect'",
-    "service_subtype != 'other_garbage_can_repair'"
+    "service_subtype != 'other_garbage_can_repair'",
+    
+    # New Exclusions (Checking both case formats to be safe)
+    "service_subtype != 'Other_including_abandoned_toter'",
+    "service_subtype != 'other_including_abandoned_toter'",
+    
+    "service_subtype != 'Other_Illegal_Parking'",
+    "service_subtype != 'other_illegal_parking'",
+    
+    "service_subtype != 'Pavement_Defect'",
+    "service_subtype != 'pavement_defect'",
+    
+    "service_subtype != 'Blocking_Bicycle_Lane'",
+    "service_subtype != 'blocking_bicycle_lane'",
+    
+    "service_subtype != 'Blocking_Driveway_Cite_Only'",
+    "service_subtype != 'blocking_driveway_cite_only'",
+    
+    "service_subtype != 'Offensive'",
+    "service_subtype != 'offensive'",
+    
+    "service_subtype != 'Parking_on_Sidewalk'",
+    "service_subtype != 'parking_on_sidewalk'"
 ]
 exclusion_string = " AND ".join(exclusions)
 
@@ -291,16 +311,9 @@ def get_image_content(media_item):
     # 3. Fallback
     return url, "url"
 
-# 8. Feed Display (SORTING FIX: CHRONOLOGICAL FEED)
+# 8. Feed Display (MOBILE OPTIMIZED LOOP)
 if not df.empty:
-    # Instead of column-major order (which breaks mobile sorting),
-    # we use a simple loop. Streamlit containers naturally stack vertically on mobile
-    # but display nicely on desktop.
-    
-    # We will use st.columns inside the loop for Desktop layout, 
-    # but strictly respect the dataframe order (Requested Date DESC).
-    
-    # Break into chunks of 4 for grid layout
+    # Use chunked layout for responsive grid
     chunk_size = 4
     for i in range(0, len(df), chunk_size):
         chunk = df.iloc[i:i + chunk_size]
