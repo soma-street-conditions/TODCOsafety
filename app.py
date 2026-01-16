@@ -25,9 +25,9 @@ st.markdown("""
     <meta name="robots" content="noindex, nofollow">
 """, unsafe_allow_html=True)
 
-# 2. Session State
+# 2. Session State (UPDATED LIMIT TO 200)
 if 'limit' not in st.session_state:
-    st.session_state.limit = 2000
+    st.session_state.limit = 200
 
 # 3. Configuration & Sites
 five_months_ago = (datetime.now() - timedelta(days=150)).strftime('%Y-%m-%dT%H:%M:%S')
@@ -291,27 +291,36 @@ def get_image_content(media_item):
     # 3. Fallback
     return url, "url"
 
-# 8. Feed Display
+# 8. Feed Display (SORTING FIX: CHRONOLOGICAL FEED)
 if not df.empty:
-    cols = st.columns(4)
-    display_count = 0
+    # Instead of column-major order (which breaks mobile sorting),
+    # we use a simple loop. Streamlit containers naturally stack vertically on mobile
+    # but display nicely on desktop.
     
-    for index, row in df.iterrows():
-        notes = str(row.get('status_notes', '')).lower()
-        if 'duplicate' in notes: continue
-
-        media_content, media_type = get_image_content(row.get('media_url'))
+    # We will use st.columns inside the loop for Desktop layout, 
+    # but strictly respect the dataframe order (Requested Date DESC).
+    
+    # Break into chunks of 4 for grid layout
+    chunk_size = 4
+    for i in range(0, len(df), chunk_size):
+        chunk = df.iloc[i:i + chunk_size]
+        cols = st.columns(chunk_size)
         
-        if media_content:
-            col_index = display_count % 4
-            with cols[col_index]:
-                with st.container(border=True):
-                    
-                    try:
-                        st.image(media_content, width="stretch")
-                    except:
-                        st.image("https://placehold.co/600x400?text=Image+Error", width="stretch")
+        for j, (index, row) in enumerate(chunk.iterrows()):
+            with cols[j]:
+                notes = str(row.get('status_notes', '')).lower()
+                if 'duplicate' in notes: continue
 
+                with st.container(border=True):
+                    media_content, media_type = get_image_content(row.get('media_url'))
+                    
+                    if media_content:
+                        try:
+                            st.image(media_content, width="stretch")
+                        except:
+                            st.image("https://placehold.co/600x400?text=Image+Error", width="stretch")
+                    
+                    # Metadata
                     if 'requested_datetime' in row:
                         date_str = pd.to_datetime(row['requested_datetime']).strftime('%b %d, %I:%M %p')
                     else: date_str = "?"
@@ -331,15 +340,12 @@ if not df.empty:
                     st.markdown(f"**{display_title}**")
                     st.markdown(f"{date_display} | [{address}]({map_url}) | **Near {site_name}**")
             
-            display_count += 1
-            
-    if display_count == 0: st.info("No records found with media evidence.")
-    
+    # Load More
     st.markdown("---")
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         if st.button(f"Load More Records (Current: {st.session_state.limit})"):
-            st.session_state.limit += 500
+            st.session_state.limit += 200
             st.rerun()
 
 else: st.info(f"No records found within 160ft of any monitored site in the last 5 months.")
